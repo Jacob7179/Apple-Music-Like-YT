@@ -1,0 +1,5 @@
+{
+  "name": "uMusic",
+  "description": "An Apple Music-inspired player powered by YouTube and Gemini.",
+  "requestFramePermissions": []
+}
