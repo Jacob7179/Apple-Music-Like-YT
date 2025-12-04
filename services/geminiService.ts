@@ -5,18 +5,23 @@ import { INITIAL_SONGS } from "../constants";
 let ai: GoogleGenAI | null = null;
 let isDemoMode = false;
 
+// Initialize AI Client
 try {
-  // Safely check for API Key availability
-  // in build environments, process.env.API_KEY is replaced by the actual key string.
-  // in browser environments without replacement, this check prevents crashing.
-  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-     ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  let apiKey = null;
+  // Check for process.env safely
+  if (typeof process !== 'undefined' && process.env) {
+      apiKey = process.env.API_KEY;
+  }
+  
+  // Validate Key: Must exist, not be empty, and not be the string "undefined"
+  if (apiKey && apiKey !== 'undefined' && apiKey.trim() !== '') {
+     ai = new GoogleGenAI({ apiKey });
   } else {
-     throw new Error("API Key missing");
+     throw new Error("API Key missing or invalid");
   }
 } catch (e) {
   isDemoMode = true;
-  console.warn("uMusic: No API Key found in environment. Running in Demo Mode (Mock Data).");
+  console.warn("uMusic: Running in Demo Mode (No valid API Key found).");
 }
 
 const extractVideoId = (url: string): string | null => {
@@ -28,18 +33,22 @@ const extractVideoId = (url: string): string | null => {
   return (match && match[2] && match[2].length === 11) ? match[2] : null;
 };
 
+// Helper for Mock Data
+const getMockData = (query: string): Song[] => {
+    console.log(`[Demo Mode] Searching local library for: "${query}"`);
+    const lowerQ = query.toLowerCase();
+    return INITIAL_SONGS.filter(s => 
+        s.title.toLowerCase().includes(lowerQ) || 
+        s.artist.toLowerCase().includes(lowerQ)
+    );
+};
+
 export const searchYouTube = async (query: string): Promise<Song[]> => {
-  // --- DEMO MODE FALLBACK ---
+  // 1. Immediate Demo Mode check
   if (isDemoMode || !ai) {
-      console.log(`[Demo Mode] Searching local library for: "${query}"`);
-      await new Promise(resolve => setTimeout(resolve, 500)); // Fake latency
-      const lowerQ = query.toLowerCase();
-      return INITIAL_SONGS.filter(s => 
-          s.title.toLowerCase().includes(lowerQ) || 
-          s.artist.toLowerCase().includes(lowerQ)
-      );
+      await new Promise(resolve => setTimeout(resolve, 600)); // Simulate network latency
+      return getMockData(query);
   }
-  // --------------------------
 
   try {
     const prompt = `Search YouTube for "${query}".
@@ -55,12 +64,7 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
     - "videoId": string (the 11-character YouTube ID)
     - "thumbnail": string (optional)
     
-    If you cannot find exact videoIds, provide the full YouTube "url" instead.
-    
-    Example:
-    [
-      { "title": "Song Name", "artist": "Artist", "videoId": "dQw4w9WgXcQ" }
-    ]`;
+    If you cannot find exact videoIds, provide the full YouTube "url" instead.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -73,15 +77,10 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
     const text = response.text || "";
     let songs: Song[] = [];
 
-    // 1. Clean and Parse JSON
-    // Remove markdown code blocks if present (```json ... ```)
+    // Clean and Parse JSON
     let jsonString = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    // Attempt to extract array from string if surrounding text exists
     const jsonMatch = jsonString.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-        jsonString = jsonMatch[0];
-    }
+    if (jsonMatch) jsonString = jsonMatch[0];
 
     try {
         const parsed = JSON.parse(jsonString);
@@ -99,10 +98,10 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
             }).filter((s): s is Song => s !== null);
         }
     } catch (e) {
-        console.warn("Gemini Search: JSON parse failed, attempting fallback.", e);
+        console.warn("Gemini Search: JSON parse failed, parsing chunks.", e);
     }
 
-    // 2. Fallback to Grounding Metadata if JSON failed or returned empty
+    // Fallback to Grounding Metadata
     if (songs.length === 0) {
         const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
         if (chunks && chunks.length > 0) {
@@ -123,7 +122,6 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
         }
     }
 
-    // Deduplicate
     const uniqueSongs = songs.filter((song, index, self) => 
         index === self.findIndex((t) => (t.videoId === song.videoId))
     );
@@ -132,39 +130,23 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
     return uniqueSongs;
 
   } catch (error) {
-    console.error("Gemini Search Error:", error);
-    return [];
+    console.error("Gemini Search API Failed:", error);
+    console.warn("Switching to Demo Mode due to API error (likely Invalid Key or Network).");
+    isDemoMode = true; // Auto-switch to demo mode for subsequent requests
+    return getMockData(query); // Return mock data for this request
   }
 };
 
 export const getLyrics = async (title: string, artist: string): Promise<string> => {
-    // --- DEMO MODE FALLBACK ---
+    // 1. Immediate Demo Mode check
     if (isDemoMode || !ai) {
-        return `[Demo Mode - Lyrics Unavailable]
-        
-(Verse 1)
-This is a demo version of the app
-Running without an API key map
-The design is sleek, the player works
-But real lyrics are hidden in the murk
-
-(Chorus)
-Please configure your API Key
-To unlock the full functionality
-For now enjoy the visual vibe
-And the music that we prescribe
-
-(Outro)
-...`;
+        return getMockLyrics();
     }
-    // --------------------------
 
     try {
         const prompt = `Return the lyrics for the song "${title}" by "${artist}". 
         Return ONLY the lyrics in plain text with stanza breaks. 
-        Do not add any conversational text or "Here are the lyrics" headers.
-        If the song is instrumental, return "Instrumental".
-        Format it nicely with spacing.`;
+        Do not add any conversational text.`;
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -173,7 +155,23 @@ And the music that we prescribe
 
         return response.text || "Lyrics not available.";
     } catch (error) {
-        console.error("Error fetching lyrics:", error);
-        return "Could not load lyrics.";
+        console.error("Gemini Lyrics API Failed:", error);
+        isDemoMode = true; // Auto-switch
+        return getMockLyrics();
     }
 }
+
+const getMockLyrics = () => `[Demo Mode - Lyrics Unavailable]
+
+(Verse 1)
+This is a demo version of the app
+Running without a valid API key map
+The design is sleek, the player works
+But real lyrics are hidden in the murk
+
+(Chorus)
+Please configure your API Key
+To unlock the full functionality
+For now enjoy the visual vibe
+And the music that we prescribe
+`;
