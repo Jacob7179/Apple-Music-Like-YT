@@ -1,7 +1,23 @@
 import { GoogleGenAI } from "@google/genai";
 import { Song } from "../types";
+import { INITIAL_SONGS } from "../constants";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let ai: GoogleGenAI | null = null;
+let isDemoMode = false;
+
+try {
+  // Safely check for API Key availability
+  // in build environments, process.env.API_KEY is replaced by the actual key string.
+  // in browser environments without replacement, this check prevents crashing.
+  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+     ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  } else {
+     throw new Error("API Key missing");
+  }
+} catch (e) {
+  isDemoMode = true;
+  console.warn("uMusic: No API Key found in environment. Running in Demo Mode (Mock Data).");
+}
 
 const extractVideoId = (url: string): string | null => {
   if (!url) return null;
@@ -13,6 +29,18 @@ const extractVideoId = (url: string): string | null => {
 };
 
 export const searchYouTube = async (query: string): Promise<Song[]> => {
+  // --- DEMO MODE FALLBACK ---
+  if (isDemoMode || !ai) {
+      console.log(`[Demo Mode] Searching local library for: "${query}"`);
+      await new Promise(resolve => setTimeout(resolve, 500)); // Fake latency
+      const lowerQ = query.toLowerCase();
+      return INITIAL_SONGS.filter(s => 
+          s.title.toLowerCase().includes(lowerQ) || 
+          s.artist.toLowerCase().includes(lowerQ)
+      );
+  }
+  // --------------------------
+
   try {
     const prompt = `Search YouTube for "${query}".
     Return a list of 6 top music video results.
@@ -110,6 +138,27 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
 };
 
 export const getLyrics = async (title: string, artist: string): Promise<string> => {
+    // --- DEMO MODE FALLBACK ---
+    if (isDemoMode || !ai) {
+        return `[Demo Mode - Lyrics Unavailable]
+        
+(Verse 1)
+This is a demo version of the app
+Running without an API key map
+The design is sleek, the player works
+But real lyrics are hidden in the murk
+
+(Chorus)
+Please configure your API Key
+To unlock the full functionality
+For now enjoy the visual vibe
+And the music that we prescribe
+
+(Outro)
+...`;
+    }
+    // --------------------------
+
     try {
         const prompt = `Return the lyrics for the song "${title}" by "${artist}". 
         Return ONLY the lyrics in plain text with stanza breaks. 
