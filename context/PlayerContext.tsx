@@ -1,3 +1,5 @@
+
+
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react';
 import { Song, PlayerState } from '../types';
 
@@ -11,7 +13,11 @@ interface PlayerContextType {
   playPrevious: () => void;
   updateProgress: (currentTime: number, duration: number) => void;
   toggleLyrics: () => void;
+  toggleQueue: () => void;
   toggleLike: (song: Song) => void;
+  seekTo: (time: number) => void;
+  clearSeek: () => void;
+  markUnplayable: (videoId: string) => void;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
@@ -26,7 +32,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     duration: 0,
     currentTime: 0,
     isLyricsVisible: false,
-    likedSongs: []
+    isQueueVisible: false,
+    likedSongs: [],
+    seekTime: null,
+    unplayableIds: []
   });
 
   // Load liked songs from local storage on mount
@@ -48,7 +57,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setState(prev => {
         let queue = prev.queue;
         if (newQueue) {
-            queue = newQueue;
+            // Deduplicate newQueue based on unique videoId
+            queue = newQueue.filter((item, index, self) =>
+                index === self.findIndex((t) => t.id === item.id)
+            );
         } else if (!prev.queue.find(s => s.id === song.id)) {
             // Add to queue if not present
             queue = [song, ...prev.queue];
@@ -71,15 +83,21 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setState(prev => ({ ...prev, volume }));
   }, []);
 
-  const setQueue = useCallback((queue: Song[]) => {
-    setState(prev => ({ ...prev, queue }));
+  const setQueue = useCallback((newQueue: Song[]) => {
+    // Deduplicate when setting queue directly
+    const uniqueQueue = newQueue.filter((item, index, self) =>
+        index === self.findIndex((t) => t.id === item.id)
+    );
+    setState(prev => ({ ...prev, queue: uniqueQueue }));
   }, []);
 
   const playNext = useCallback(() => {
     setState(prev => {
       if (!prev.currentSong || prev.queue.length === 0) return prev;
+      
       const currentIndex = prev.queue.findIndex(s => s.id === prev.currentSong?.id);
-      const nextIndex = (currentIndex + 1) % prev.queue.length;
+      let nextIndex = (currentIndex + 1) % prev.queue.length;
+      
       return {
         ...prev,
         currentSong: prev.queue[nextIndex],
@@ -114,6 +132,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setState(prev => ({ ...prev, isLyricsVisible: !prev.isLyricsVisible }));
   }, []);
 
+  const toggleQueue = useCallback(() => {
+    setState(prev => ({ ...prev, isQueueVisible: !prev.isQueueVisible }));
+  }, []);
+
   const toggleLike = useCallback((song: Song) => {
     setState(prev => {
         const isLiked = prev.likedSongs.some(s => s.id === song.id);
@@ -137,8 +159,23 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     });
   }, []);
 
+  const seekTo = useCallback((time: number) => {
+      setState(prev => ({ ...prev, seekTime: time }));
+  }, []);
+
+  const clearSeek = useCallback(() => {
+      setState(prev => ({ ...prev, seekTime: null }));
+  }, []);
+
+  const markUnplayable = useCallback((videoId: string) => {
+      setState(prev => ({
+          ...prev,
+          unplayableIds: [...prev.unplayableIds, videoId]
+      }));
+  }, []);
+
   return (
-    <PlayerContext.Provider value={{ state, playSong, togglePlay, setVolume, setQueue, playNext, playPrevious, updateProgress, toggleLyrics, toggleLike }}>
+    <PlayerContext.Provider value={{ state, playSong, togglePlay, setVolume, setQueue, playNext, playPrevious, updateProgress, toggleLyrics, toggleQueue, toggleLike, seekTo, clearSeek, markUnplayable }}>
       {children}
     </PlayerContext.Provider>
   );

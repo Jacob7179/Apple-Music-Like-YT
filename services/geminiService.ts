@@ -1,4 +1,5 @@
-import { GoogleGenAI } from "@google/genai";
+
+import { GoogleGenAI, Type } from "@google/genai";
 import { Song } from "../types";
 import { INITIAL_SONGS } from "../constants";
 
@@ -137,41 +138,168 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
   }
 };
 
-export const getLyrics = async (title: string, artist: string): Promise<string> => {
-    // 1. Immediate Demo Mode check
+export interface LyricLine {
+    time: number;
+    text: string;
+}
+
+// Parse standard LRC format: [mm:ss.xx] Lyrics
+const parseLRC = (lrc: string): LyricLine[] => {
+    const lines = lrc.split('\n');
+    const result: LyricLine[] = [];
+    const timeReg = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+    
+    for (const line of lines) {
+        const match = line.match(timeReg);
+        if (match) {
+            const min = parseInt(match[1]);
+            const sec = parseInt(match[2]);
+            const frac = match[3];
+            // ms can be 2 digits (centiseconds) or 3 digits (milliseconds)
+            const ms = frac.length === 2 ? parseInt(frac) * 10 : parseInt(frac);
+            
+            const time = min * 60 + sec + (ms / 1000);
+            // Remove timestamp and any potential metadata tags
+            const text = line.replace(/\[.*?\]/g, '').trim();
+            
+            // Filter out empty lines or common metadata headers if strictly parsing song text
+            if (text && !text.startsWith('ar:') && !text.startsWith('ti:')) {
+                result.push({ time, text });
+            }
+        }
+    }
+    return result;
+};
+
+// Helper: Clean title for better matching (remove Official Video, symbols, etc.)
+const cleanMetadata = (str: string): string => {
+    if (!str) return "";
+    return str
+        .replace(/\(Official.*?\)/gi, "")
+        .replace(/\[Official.*?\]/gi, "")
+        .replace(/\(Music Video\)/gi, "")
+        .replace(/\(Lyric Video\)/gi, "")
+        .replace(/\[MV\]/gi, "")
+        .replace(/\(MV\)/gi, "")
+        .replace(/Official Video/gi, "")
+        .replace(/Official Audio/gi, "")
+        .replace(/ft\..*/i, "")
+        .replace(/feat\..*/i, "")
+        .replace(/[\(\)\[\]]/g, " ") // Remove brackets
+        .replace(/\s+/g, " ") // Collapse multiple spaces
+        .trim();
+};
+
+export const getLyrics = async (title: string, artist: string, duration: number = 200): Promise<LyricLine[]> => {
+    
+    const cleanTitle = cleanMetadata(title);
+    const cleanArtist = cleanMetadata(artist);
+
+    // 1. Try LRCLIB (Highest Priority)
+    try {
+        console.log(`Fetching lyrics from LRCLIB for: "${cleanTitle}" by "${cleanArtist}"`);
+        const url = new URL('https://lrclib.net/api/get');
+        url.searchParams.append('artist_name', cleanArtist);
+        url.searchParams.append('track_name', cleanTitle);
+        url.searchParams.append('duration', Math.floor(duration).toString());
+
+        const res = await fetch(url.toString());
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.syncedLyrics) {
+                return parseLRC(data.syncedLyrics);
+            }
+        }
+
+        // 1b. Fallback to LRCLIB Search (Fuzzy Match)
+        const searchUrl = new URL('https://lrclib.net/api/search');
+        searchUrl.searchParams.append('q', `${cleanTitle} ${cleanArtist}`);
+        const searchRes = await fetch(searchUrl.toString());
+        if (searchRes.ok) {
+            const searchData = await searchRes.json();
+             // Find best match with synced lyrics
+             if (Array.isArray(searchData)) {
+                 // Sort by how close the duration is
+                 const bestMatch = searchData
+                    .filter((item: any) => item.syncedLyrics)
+                    .sort((a: any, b: any) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration))[0];
+                 
+                 if (bestMatch) {
+                     return parseLRC(bestMatch.syncedLyrics);
+                 }
+             }
+        }
+    } catch (e) {
+        console.warn("LRCLIB fetch failed, falling back to Gemini.", e);
+    }
+
+    // 2. Fallback to Gemini
     if (isDemoMode || !ai) {
-        return getMockLyrics();
+        return getMockLyrics(duration);
     }
 
     try {
-        const prompt = `Return the lyrics for the song "${title}" by "${artist}". 
-        Return ONLY the lyrics in plain text with stanza breaks. 
-        Do not add any conversational text.`;
+        const prompt = `You are a professional lyrics synchronization engine.
+        Provide the ACTUAL synchronized lyrics for the song "${cleanTitle}" by "${cleanArtist}".
+        The song duration is approximately ${Math.floor(duration)} seconds.
+
+        Output strictly a JSON array of objects with "time" (number in seconds) and "text" (string).
+        
+        Rules:
+        1. "time": Precise start time of the line in seconds.
+        2. "text": The exact lyric line. No conversational filler.
+        3. Structure the lyrics logically (Verse, Chorus, Bridge) but do not include headers like [Chorus] in the text.
+        4. If you don't know the lyrics, provide a "Lyrics not available" message at time 0.
+        `;
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            time: { type: Type.NUMBER },
+                            text: { type: Type.STRING }
+                        }
+                    }
+                }
+            }
         });
 
-        return response.text || "Lyrics not available.";
+        const text = response.text || "[]";
+        try {
+            const data = JSON.parse(text);
+            if (!Array.isArray(data) || data.length === 0) return getMockLyrics(duration);
+            return data;
+        } catch (e) {
+            console.error("Failed to parse lyrics JSON", e);
+            return getMockLyrics(duration);
+        }
+
     } catch (error) {
         console.error("Gemini Lyrics API Failed:", error);
-        isDemoMode = true; // Auto-switch
-        return getMockLyrics();
+        return getMockLyrics(duration);
     }
 }
 
-const getMockLyrics = () => `[Demo Mode - Lyrics Unavailable]
+const getMockLyrics = (duration: number): LyricLine[] => {
+    const lines = [
+        "...",
+        "[Lyrics Unavailable]",
+        "Could not fetch synchronized lyrics",
+        "Enjoy the music",
+        "..."
+    ];
+    
+    const step = (duration * 0.8) / lines.length;
+    const startOffset = 5;
 
-(Verse 1)
-This is a demo version of the app
-Running without a valid API key map
-The design is sleek, the player works
-But real lyrics are hidden in the murk
-
-(Chorus)
-Please configure your API Key
-To unlock the full functionality
-For now enjoy the visual vibe
-And the music that we prescribe
-`;
+    return lines.map((text, i) => ({
+        time: startOffset + (i * step),
+        text
+    }));
+};

@@ -1,6 +1,8 @@
+
 import React, { useState } from 'react';
 import { View } from '../types';
 import { Icons } from './Icons';
+import { Maximize2, Minimize2 } from 'lucide-react';
 
 interface SidebarProps {
   currentView: View;
@@ -10,19 +12,28 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ currentView, setView, onSearch }) => {
   const [searchVal, setSearchVal] = useState("");
+  const [isFullScreen, setIsFullScreen] = useState(false);
 
   const handleSearchSubmit = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && searchVal.trim()) {
       onSearch(searchVal);
-      // Do not call setView(View.SEARCH) here, as it is handled by onSearch in the parent
-      // and calling it directly via setView (which maps to handleNav) would clear the search query.
+    }
+  };
+
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().then(() => setIsFullScreen(true));
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen().then(() => setIsFullScreen(false));
+        }
     }
   };
 
   const navItems = [
     { id: View.HOME, label: 'Home', icon: Icons.Home },
-    { id: View.SEARCH, label: 'Browse', icon: Icons.Browse }, // Using SEARCH view logic for Browse mock for now
-    { id: View.PLAYLIST_TOP, label: 'Radio', icon: Icons.Radio }, // Mock Radio
+    { id: View.SEARCH, label: 'Browse', icon: Icons.Browse }, 
+    { id: View.PLAYLIST_TOP, label: 'Radio', icon: Icons.Radio }, 
   ];
 
   const libraryItems = [
@@ -115,6 +126,16 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setView, onSearch }) => 
                 </button>
             )
          })}
+      </div>
+
+      <div className="pt-4 border-t border-white/5 px-2">
+          <button 
+            onClick={toggleFullScreen}
+            className="w-full flex items-center space-x-3 px-3 py-2 rounded-md text-gray-400 hover:text-white hover:bg-white/5 transition-all"
+          >
+              {isFullScreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+              <span className="text-[14px]">Full Screen</span>
+          </button>
       </div>
     </div>
   );

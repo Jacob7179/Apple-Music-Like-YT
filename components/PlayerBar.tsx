@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { usePlayer } from '../context/PlayerContext';
 import { Icons } from './Icons';
@@ -19,11 +20,12 @@ const formatTime = (seconds: number) => {
 };
 
 const PlayerBar: React.FC = () => {
-  const { state, togglePlay, setVolume, playNext, playPrevious, updateProgress, toggleLyrics, toggleLike } = usePlayer();
+  const { state, togglePlay, setVolume, playNext, playPrevious, updateProgress, toggleLyrics, toggleQueue, toggleLike, seekTo, clearSeek, markUnplayable } = usePlayer();
   const playerRef = useRef<any>(null);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [errorCount, setErrorCount] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [localProgress, setLocalProgress] = useState(0);
 
   // Load YouTube Iframe API
   useEffect(() => {
@@ -82,17 +84,12 @@ const PlayerBar: React.FC = () => {
           },
           'onError': (event: any) => {
               console.warn("YouTube Player Error:", event.data);
-              // Error 150/101/153 = Restricted or Not Found.
-              // Skip to next song automatically.
-              if (errorCount < 3) {
-                  console.log(`Skipping restricted song (${errorCount + 1}/3)...`);
-                  setErrorCount(prev => prev + 1);
-                  setTimeout(() => {
-                      playNext();
-                  }, 1000);
-              } else {
-                  console.error("Too many playback errors. Stopping queue.");
-                  setErrorCount(0); // Reset to allow retry later
+              // Error 150/101 = Restricted
+              if (state.currentSong) {
+                  markUnplayable(state.currentSong.videoId);
+                  console.log(`Marking ${state.currentSong.title} as unplayable and skipping.`);
+                  // Short delay then skip
+                  setTimeout(() => playNext(), 500);
               }
           }
         }
@@ -102,11 +99,8 @@ const PlayerBar: React.FC = () => {
             ? playerRef.current.getVideoData().video_id 
             : null;
         
-        // Always load if ID changed, or if we are supposed to be playing but aren't
         if (currentVideoId !== state.currentSong.videoId) {
             playerRef.current.loadVideoById(state.currentSong.videoId);
-            // Reset error count on new song load
-            setErrorCount(0);
         }
     }
   }, [isPlayerReady, state.currentSong]); 
@@ -115,9 +109,7 @@ const PlayerBar: React.FC = () => {
   useEffect(() => {
     if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
       if (state.isPlaying) {
-        // Force play if state is playing
         const playerState = playerRef.current.getPlayerState();
-        // 1=Playing, 3=Buffering, 5=Cued, -1=Unstarted
         if (playerState !== 1 && playerState !== 3) { 
              playerRef.current.playVideo();
         }
@@ -125,7 +117,7 @@ const PlayerBar: React.FC = () => {
         playerRef.current.pauseVideo();
       }
     }
-  }, [state.isPlaying, state.currentSong]); // Check on song change too
+  }, [state.isPlaying, state.currentSong]);
 
   // Volume Control
   useEffect(() => {
@@ -135,11 +127,19 @@ const PlayerBar: React.FC = () => {
     }
   }, [state.volume]);
 
+  // Handle Seek Requests from Context (e.g., from LyricsOverlay)
+  useEffect(() => {
+      if (state.seekTime !== null && playerRef.current && typeof playerRef.current.seekTo === 'function') {
+          playerRef.current.seekTo(state.seekTime, true);
+          clearSeek();
+      }
+  }, [state.seekTime, clearSeek]);
+
   // Progress Interval
   useEffect(() => {
     const interval = setInterval(() => {
-      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-        // Only update if playing or buffering
+      // Don't update from player if user is dragging
+      if (!isDragging && playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
         const pState = playerRef.current.getPlayerState();
         if (pState === 1 || pState === 3) {
             const currentTime = playerRef.current.getCurrentTime();
@@ -149,46 +149,70 @@ const PlayerBar: React.FC = () => {
             }
         }
       }
-    }, 1000);
+    }, 200); // 200ms for smoother updates
     return () => clearInterval(interval);
-  }, [updateProgress]);
+  }, [updateProgress, isDragging]);
+
+  const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = Number(e.target.value);
+      setLocalProgress(val);
+      if (!isDragging) {
+          // If not dragging (e.g. click), seek immediately
+          const seekToTime = (val / 100) * state.duration;
+          seekTo(seekToTime);
+      }
+  };
+
+  const handleSeekStart = () => {
+      setIsDragging(true);
+      setLocalProgress(state.progress);
+  };
+
+  const handleSeekEnd = (e: React.MouseEvent | React.TouchEvent) => {
+      setIsDragging(false);
+      const seekToTime = (localProgress / 100) * state.duration;
+      if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+          playerRef.current.seekTo(seekToTime, true);
+          updateProgress(seekToTime, state.duration);
+      }
+  };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setVolume(Number(e.target.value));
   };
 
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const seekTo = (Number(e.target.value) / 100) * state.duration;
-      if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
-          playerRef.current.seekTo(seekTo, true);
-          updateProgress(seekTo, state.duration);
-      }
-  };
-
   const isLiked = state.currentSong && state.likedSongs.some(s => s.id === state.currentSong?.id);
+  
+  // Use local progress while dragging, otherwise state progress
+  const displayProgress = isDragging ? localProgress : state.progress;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-[88px] bg-[#1e1e1e]/95 backdrop-blur-xl border-t border-white/5 z-[100] flex items-center justify-between px-6 select-none shadow-[0_-5px_20px_rgba(0,0,0,0.3)]">
-      {/* 
-        Hidden Player: 
-        Opacity 0 makes it invisible but rendered.
-        Dimensions 1px to avoid layout issues but ensure rendering.
-      */}
+    <div className="fixed bottom-[60px] md:bottom-0 left-0 right-0 h-[64px] md:h-[88px] bg-[#1e1e1e]/95 backdrop-blur-xl border-t border-white/5 z-[100] flex items-center justify-between px-4 md:px-6 select-none shadow-[0_-5px_20px_rgba(0,0,0,0.3)] transition-all duration-300">
       <div className="absolute top-0 left-0 w-1 h-1 opacity-0 pointer-events-none overflow-hidden -z-10">
          <div id="yt-player"></div>
       </div>
 
+      {/* Mobile Progress Bar (Thin line at top) */}
+      <div className="md:hidden absolute top-0 left-0 right-0 h-[2px] bg-white/10">
+         <div className="h-full bg-[#fa2d48]" style={{ width: `${displayProgress}%` }}></div>
+      </div>
+
       {/* Track Info */}
-      <div className="flex items-center w-[30%] min-w-[200px]">
+      <div 
+        className="flex items-center flex-1 md:w-[30%] md:min-w-[200px] overflow-hidden cursor-pointer md:cursor-default"
+        onClick={() => window.innerWidth < 768 && toggleLyrics()}
+      >
         {state.currentSong ? (
           <>
             <div className="relative group flex-shrink-0">
                <img 
                 src={state.currentSong.thumbnail} 
                 alt="Album Art" 
-                className={`w-12 h-12 rounded-[4px] shadow-sm object-cover bg-neutral-800 border border-white/5`}
+                className={`w-10 h-10 md:w-12 md:h-12 rounded-[4px] shadow-sm object-cover bg-neutral-800 border border-white/5`}
                />
-                {/* Hover overlay for art expand? Not in player bar typically */}
+               <div className="hidden md:flex absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center rounded-[4px] cursor-pointer" onClick={(e) => { e.stopPropagation(); toggleLyrics(); }}>
+                   <Icons.SkipForward className="-rotate-90 text-white" size={16} />
+               </div>
             </div>
             <div className="ml-3 flex flex-col justify-center overflow-hidden mr-4">
               <span className="text-[13px] font-medium text-white/90 truncate cursor-default leading-tight" title={state.currentSong.title}>
@@ -198,16 +222,17 @@ const PlayerBar: React.FC = () => {
                 {state.currentSong.artist}
               </span>
             </div>
+            {/* Desktop Like Button */}
              <button 
-                onClick={() => state.currentSong && toggleLike(state.currentSong)}
-                className={`p-1.5 rounded-full hover:bg-white/10 transition-all active:scale-95 ${isLiked ? 'text-[#fa2d48]' : 'text-gray-500'}`}
+                onClick={(e) => { e.stopPropagation(); state.currentSong && toggleLike(state.currentSong); }}
+                className={`hidden md:block p-1.5 rounded-full hover:bg-white/10 transition-all active:scale-95 ${isLiked ? 'text-[#fa2d48]' : 'text-gray-500'}`}
             >
                 <Icons.Heart size={16} fill={isLiked ? "currentColor" : "none"} />
             </button>
           </>
         ) : (
             <div className="flex items-center gap-3 opacity-30">
-                <div className="w-12 h-12 bg-white/20 rounded-[4px]"></div>
+                <div className="w-10 h-10 md:w-12 md:h-12 bg-white/20 rounded-[4px]"></div>
                 <div className="flex items-center">
                     <Icons.Music size={20} className="text-white" />
                 </div>
@@ -215,8 +240,26 @@ const PlayerBar: React.FC = () => {
         )}
       </div>
 
-      {/* Controls */}
-      <div className="flex flex-col items-center w-[40%] max-w-xl">
+      {/* Mobile Controls */}
+      <div className="flex md:hidden items-center space-x-4 pr-1">
+         <button 
+            onClick={togglePlay} 
+            disabled={!state.currentSong}
+            className={`p-2 text-white transition ${!state.currentSong ? 'opacity-50' : ''}`}
+         >
+             {state.isPlaying ? <Icons.Pause fill="currentColor" size={24} /> : <Icons.Play fill="currentColor" size={24} />}
+         </button>
+         <button 
+            onClick={playNext}
+            disabled={!state.currentSong}
+            className="text-gray-300 active:text-white"
+         >
+             <Icons.SkipForward fill="currentColor" size={26} />
+         </button>
+      </div>
+
+      {/* Desktop Controls */}
+      <div className="hidden md:flex flex-col items-center w-[40%] max-w-xl">
         <div className="flex items-center space-x-5 mb-1.5">
             <button className="text-gray-400 hover:text-white transition active:scale-95 p-2 rounded-lg hover:bg-white/5">
                 <Icons.Shuffle size={16} />
@@ -253,14 +296,18 @@ const PlayerBar: React.FC = () => {
             <div className="flex-1 h-[3px] bg-[#3a3a3c] rounded-full relative overflow-visible cursor-pointer group/slider">
                  <div 
                     className="absolute top-0 left-0 h-full bg-[#8e8e93] group-hover/slider:bg-[#fa2d48] rounded-full transition-colors"
-                    style={{ width: `${state.progress}%` }}
+                    style={{ width: `${displayProgress}%` }}
                  ></div>
                  <input 
                     type="range" 
                     min="0" 
                     max="100" 
-                    value={state.progress || 0}
-                    onChange={handleSeek}
+                    value={displayProgress || 0}
+                    onChange={handleSeekChange}
+                    onMouseDown={handleSeekStart}
+                    onMouseUp={handleSeekEnd}
+                    onTouchStart={handleSeekStart}
+                    onTouchEnd={handleSeekEnd}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                 />
             </div>
@@ -268,8 +315,8 @@ const PlayerBar: React.FC = () => {
         </div>
       </div>
 
-      {/* Volume & Extras */}
-      <div className="flex items-center justify-end w-[30%] space-x-1">
+      {/* Desktop Volume & Extras */}
+      <div className="hidden md:flex items-center justify-end w-[30%] space-x-1">
         <button 
             className={`transition p-2 rounded-md ${state.isLyricsVisible ? 'text-white bg-white/20' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
             onClick={toggleLyrics}
@@ -294,7 +341,10 @@ const PlayerBar: React.FC = () => {
                 }}
             />
         </div>
-        <button className="text-gray-400 hover:text-[#fa2d48] p-2 hover:bg-white/10 rounded-md transition">
+        <button 
+            onClick={toggleQueue} 
+            className={`transition p-2 rounded-md ${state.isQueueVisible ? 'text-[#fa2d48] bg-white/10' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+        >
             <Icons.ListMusic size={18} />
         </button>
       </div>

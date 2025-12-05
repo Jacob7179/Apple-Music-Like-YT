@@ -1,3 +1,5 @@
+
+
 export interface Song {
   id: string;
   title: string;
@@ -16,7 +18,10 @@ export interface PlayerState {
   duration: number; // in seconds
   currentTime: number; // in seconds
   isLyricsVisible: boolean;
+  isQueueVisible: boolean;
   likedSongs: Song[]; // Cache full objects for library
+  seekTime: number | null; // Signal to PlayerBar to seek
+  unplayableIds: string[]; // List of video IDs that failed to play
 }
 
 export enum View {
@@ -26,6 +31,7 @@ export enum View {
   LIBRARY_SONGS = 'LIBRARY_SONGS',
   LIBRARY_ARTISTS = 'LIBRARY_ARTISTS',
   LIBRARY_ALBUMS = 'LIBRARY_ALBUMS',
+  LIBRARY_ARTIST_DETAIL = 'LIBRARY_ARTIST_DETAIL',
   PLAYLIST_CHILL = 'PLAYLIST_CHILL',
   PLAYLIST_TOP = 'PLAYLIST_TOP'
 }
