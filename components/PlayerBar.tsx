@@ -1,7 +1,7 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { usePlayer } from '../context/PlayerContext';
 import { Icons } from './Icons';
+import { RepeatMode } from '../types';
 
 // Fix: Extend Window interface for YouTube IFrame API
 declare global {
@@ -9,6 +9,10 @@ declare global {
     YT: any;
     onYouTubeIframeAPIReady: (() => void) | undefined;
   }
+}
+
+interface PlayerBarProps {
+    onArtistClick?: (artist: string) => void;
 }
 
 // Helper to format time
@@ -19,13 +23,16 @@ const formatTime = (seconds: number) => {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 };
 
-const PlayerBar: React.FC = () => {
-  const { state, togglePlay, setVolume, playNext, playPrevious, updateProgress, toggleLyrics, toggleQueue, toggleLike, seekTo, clearSeek, markUnplayable } = usePlayer();
+const PlayerBar: React.FC<PlayerBarProps> = ({ onArtistClick }) => {
+  const { state, togglePlay, setIsPlaying, setVolume, playNext, playPrevious, updateProgress, toggleLyrics, toggleQueue, toggleLike, seekTo, clearSeek, markUnplayable, toggleRepeat, toggleShuffle, resolveArtist } = usePlayer();
   const playerRef = useRef<any>(null);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [localProgress, setLocalProgress] = useState(0);
+  
+  // Ref to ignore pause events during seek/load operations to prevent state desync
+  const ignorePauseRef = useRef(false);
 
   // Load YouTube Iframe API
   useEffect(() => {
@@ -48,6 +55,10 @@ const PlayerBar: React.FC = () => {
       firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
     }
   }, []);
+
+  // Ref to hold current state for the onStateChange closure which is created once
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
 
   // Initialize Player & Handle Song Changes
   useEffect(() => {
@@ -77,9 +88,18 @@ const PlayerBar: React.FC = () => {
              }
           },
           'onStateChange': (event: any) => {
-             // YT.PlayerState.ENDED = 0
-             if (event.data === 0) {
-                playNext();
+             // YT.PlayerState.ENDED = 0, PLAYING = 1, PAUSED = 2, BUFFERING = 3, UNSTARTED = -1
+             const playerStatus = event.data;
+             
+             if (playerStatus === 0) { // ENDED
+                 handleSongEnded(); 
+             } else if (playerStatus === 1) { // PLAYING
+                 if (!stateRef.current.isPlaying) setIsPlaying(true);
+             } else if (playerStatus === 2) { // PAUSED
+                 // Only sync pause state if we are not currently in a seek/load operation (ignorePauseRef)
+                 if (stateRef.current.isPlaying && !ignorePauseRef.current) {
+                     setIsPlaying(false);
+                 }
              }
           },
           'onError': (event: any) => {
@@ -88,7 +108,6 @@ const PlayerBar: React.FC = () => {
               if (state.currentSong) {
                   markUnplayable(state.currentSong.videoId);
                   console.log(`Marking ${state.currentSong.title} as unplayable and skipping.`);
-                  // Short delay then skip
                   setTimeout(() => playNext(), 500);
               }
           }
@@ -100,24 +119,44 @@ const PlayerBar: React.FC = () => {
             : null;
         
         if (currentVideoId !== state.currentSong.videoId) {
+            // Signal that we are loading a new song, ignore transient pauses
+            ignorePauseRef.current = true;
             playerRef.current.loadVideoById(state.currentSong.videoId);
+            
+            // Allow a grace period for the video to start playing
+            setTimeout(() => {
+                ignorePauseRef.current = false;
+            }, 1500);
         }
     }
   }, [isPlayerReady, state.currentSong]); 
+
+  const handleSongEnded = () => {
+      const current = stateRef.current;
+      if (current.repeatMode === RepeatMode.ONE) {
+          // Replay same song
+          if (playerRef.current) {
+              playerRef.current.seekTo(0);
+              playerRef.current.playVideo();
+          }
+      } else {
+          playNext();
+      }
+  };
 
   // Control Playback State (Pause/Play)
   useEffect(() => {
     if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
       if (state.isPlaying) {
         const playerState = playerRef.current.getPlayerState();
-        if (playerState !== 1 && playerState !== 3) { 
+        if (playerState !== 1 && playerState !== 3) { // If not playing and not buffering
              playerRef.current.playVideo();
         }
       } else {
         playerRef.current.pauseVideo();
       }
     }
-  }, [state.isPlaying, state.currentSong]);
+  }, [state.isPlaying]);
 
   // Volume Control
   useEffect(() => {
@@ -127,13 +166,25 @@ const PlayerBar: React.FC = () => {
     }
   }, [state.volume]);
 
-  // Handle Seek Requests from Context (e.g., from LyricsOverlay)
+  // Handle Seek Requests from Context (e.g., from LyricsOverlay or Previous/Next)
   useEffect(() => {
       if (state.seekTime !== null && playerRef.current && typeof playerRef.current.seekTo === 'function') {
+          ignorePauseRef.current = true;
           playerRef.current.seekTo(state.seekTime, true);
+          
+          // Force play if state says so (fixes race condition where seekTo pauses)
+          if (state.isPlaying) {
+              playerRef.current.playVideo();
+          }
+          
           clearSeek();
+          
+          // Clear seeking flag after a delay to allow events to settle
+          setTimeout(() => {
+              ignorePauseRef.current = false;
+          }, 1000);
       }
-  }, [state.seekTime, clearSeek]);
+  }, [state.seekTime, clearSeek, state.isPlaying]);
 
   // Progress Interval
   useEffect(() => {
@@ -172,8 +223,17 @@ const PlayerBar: React.FC = () => {
       setIsDragging(false);
       const seekToTime = (localProgress / 100) * state.duration;
       if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+          // Manual seek from UI
+          ignorePauseRef.current = true;
           playerRef.current.seekTo(seekToTime, true);
           updateProgress(seekToTime, state.duration);
+          
+          // Ensure play continues if playing
+          if (state.isPlaying) {
+              playerRef.current.playVideo();
+          }
+          
+          setTimeout(() => { ignorePauseRef.current = false; }, 1000);
       }
   };
 
@@ -186,8 +246,10 @@ const PlayerBar: React.FC = () => {
   // Use local progress while dragging, otherwise state progress
   const displayProgress = isDragging ? localProgress : state.progress;
 
+  const resolvedArtist = state.currentSong ? resolveArtist(state.currentSong.artist) : '';
+
   return (
-    <div className="fixed bottom-[60px] md:bottom-0 left-0 right-0 h-[64px] md:h-[88px] bg-[#1e1e1e]/95 backdrop-blur-xl border-t border-white/5 z-[100] flex items-center justify-between px-4 md:px-6 select-none shadow-[0_-5px_20px_rgba(0,0,0,0.3)] transition-all duration-300">
+    <div className="fixed bottom-[60px] md:bottom-0 left-0 right-0 h-[56px] md:h-[72px] bg-[#1c1c1e]/70 backdrop-blur-3xl saturate-150 border-t border-white/5 z-[100] flex items-center justify-between px-4 md:px-6 select-none shadow-[0_-5px_20px_rgba(0,0,0,0.3)] transition-all duration-300">
       <div className="absolute top-0 left-0 w-1 h-1 opacity-0 pointer-events-none overflow-hidden -z-10">
          <div id="yt-player"></div>
       </div>
@@ -208,18 +270,26 @@ const PlayerBar: React.FC = () => {
                <img 
                 src={state.currentSong.thumbnail} 
                 alt="Album Art" 
-                className={`w-10 h-10 md:w-12 md:h-12 rounded-[4px] shadow-sm object-cover bg-neutral-800 border border-white/5`}
+                className={`w-10 h-10 md:w-11 md:h-11 rounded-[6px] shadow-sm object-cover bg-neutral-800 border border-white/5`}
                />
-               <div className="hidden md:flex absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center rounded-[4px] cursor-pointer" onClick={(e) => { e.stopPropagation(); toggleLyrics(); }}>
+               <div className="hidden md:flex absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center rounded-[6px] cursor-pointer" onClick={(e) => { e.stopPropagation(); toggleLyrics(); }}>
                    <Icons.SkipForward className="-rotate-90 text-white" size={16} />
                </div>
             </div>
             <div className="ml-3 flex flex-col justify-center overflow-hidden mr-4">
-              <span className="text-[13px] font-medium text-white/90 truncate cursor-default leading-tight" title={state.currentSong.title}>
+              <span className="text-[13px] md:text-[14px] font-medium text-white/90 truncate cursor-default leading-tight" title={state.currentSong.title}>
                 {state.currentSong.title}
               </span>
-              <span className="text-[11px] text-gray-400 truncate cursor-pointer hover:underline hover:text-white/80 transition mt-0.5">
-                {state.currentSong.artist}
+              <span 
+                className="text-[11px] md:text-[12px] text-gray-400 truncate cursor-pointer transition mt-0.5 hover:text-white"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    if (onArtistClick) {
+                        onArtistClick(resolvedArtist);
+                    }
+                }}
+              >
+                {resolvedArtist}
               </span>
             </div>
             {/* Desktop Like Button */}
@@ -232,7 +302,7 @@ const PlayerBar: React.FC = () => {
           </>
         ) : (
             <div className="flex items-center gap-3 opacity-30">
-                <div className="w-10 h-10 md:w-12 md:h-12 bg-white/20 rounded-[4px]"></div>
+                <div className="w-10 h-10 md:w-11 md:h-11 bg-white/20 rounded-[6px]"></div>
                 <div className="flex items-center">
                     <Icons.Music size={20} className="text-white" />
                 </div>
@@ -250,7 +320,7 @@ const PlayerBar: React.FC = () => {
              {state.isPlaying ? <Icons.Pause fill="currentColor" size={24} /> : <Icons.Play fill="currentColor" size={24} />}
          </button>
          <button 
-            onClick={playNext}
+            onClick={() => playNext()}
             disabled={!state.currentSong}
             className="text-gray-300 active:text-white"
          >
@@ -261,7 +331,11 @@ const PlayerBar: React.FC = () => {
       {/* Desktop Controls */}
       <div className="hidden md:flex flex-col items-center w-[40%] max-w-xl">
         <div className="flex items-center space-x-5 mb-1.5">
-            <button className="text-gray-400 hover:text-white transition active:scale-95 p-2 rounded-lg hover:bg-white/5">
+            <button 
+                onClick={toggleShuffle}
+                className={`transition active:scale-95 p-2 rounded-lg ${state.isShuffle ? 'text-[#fa2d48] bg-white/5' : 'text-gray-400 hover:text-white'}`}
+                title="Shuffle"
+            >
                 <Icons.Shuffle size={16} />
             </button>
             <button 
@@ -274,19 +348,26 @@ const PlayerBar: React.FC = () => {
             <button 
                 onClick={togglePlay} 
                 disabled={!state.currentSong}
-                className={`w-[38px] h-[38px] flex items-center justify-center bg-white rounded-md text-black hover:scale-105 active:scale-95 transition shadow-sm ${!state.currentSong ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`w-[34px] h-[34px] flex items-center justify-center bg-white rounded-md text-black hover:scale-105 active:scale-95 transition shadow-sm ${!state.currentSong ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-                {state.isPlaying ? <Icons.Pause fill="currentColor" size={20} /> : <Icons.Play fill="currentColor" className="ml-0.5" size={20} />}
+                {state.isPlaying ? <Icons.Pause fill="currentColor" size={18} /> : <Icons.Play fill="currentColor" className="ml-0.5" size={18} />}
             </button>
             <button 
-                onClick={playNext} 
+                onClick={() => playNext()} 
                 className="text-gray-200 hover:text-white transition active:scale-90"
                 disabled={!state.currentSong}
             >
                 <Icons.SkipForward fill="currentColor" size={22} />
             </button>
-            <button className="text-gray-400 hover:text-white transition active:scale-95 p-2 rounded-lg hover:bg-white/5">
+            <button 
+                onClick={toggleRepeat}
+                className={`transition active:scale-95 p-2 rounded-lg relative ${state.repeatMode !== RepeatMode.OFF ? 'text-[#fa2d48] bg-white/5' : 'text-gray-400 hover:text-white'}`}
+                title="Repeat"
+            >
                 <Icons.Repeat size={16} />
+                {state.repeatMode === RepeatMode.ONE && (
+                    <span className="absolute text-[8px] font-bold top-1.5 right-1.5">1</span>
+                )}
             </button>
         </div>
         

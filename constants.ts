@@ -212,10 +212,3 @@ export const INITIAL_SONGS: Song[] = [
     videoId: "t-E9h7fJPX4"
   }
 ];
-
-export const MOCK_PLAYLISTS = [
-  { id: 'p1', title: 'Chill Mix', cover: 'https://picsum.photos/300/300?random=10' },
-  { id: 'p2', title: 'Top Hits', cover: 'https://picsum.photos/300/300?random=11' },
-  { id: 'p3', title: 'Focus', cover: 'https://picsum.photos/300/300?random=12' },
-  { id: 'p4', title: 'Workout', cover: 'https://picsum.photos/300/300?random=13' },
-];

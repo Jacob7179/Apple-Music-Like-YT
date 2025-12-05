@@ -1,5 +1,4 @@
-
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View } from '../types';
 import { Icons } from './Icons';
 
@@ -12,7 +11,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ currentView, setView }) => {
   const items = [
     { id: View.HOME, label: 'Home', icon: Icons.Home },
     { id: View.SEARCH, label: 'Browse', icon: Icons.Browse },
-    { id: View.PLAYLIST_TOP, label: 'Radio', icon: Icons.Radio },
+    { id: View.RADIO, label: 'Radio', icon: Icons.Radio },
     { id: View.LIBRARY, label: 'Library', icon: Icons.Library },
   ];
 
