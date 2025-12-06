@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { PlayerProvider, usePlayer } from './context/PlayerContext';
 import Sidebar from './components/Sidebar';
@@ -116,10 +117,10 @@ const SongRow: React.FC<{
             </p>
         </div>
 
-        {/* Album (Mock) */}
+        {/* Artist Column (Desktop) */}
         <div className="hidden md:block w-1/3 min-w-0 pr-4">
             <p className="text-[13px] text-gray-400 truncate group-hover:text-white/70 transition-colors">
-                {song.title}
+                {displayArtist || song.artist}
             </p>
         </div>
 
@@ -1247,7 +1248,7 @@ const MainContent: React.FC<MainContentProps> = ({ view, searchQuery, onSearch, 
                          <div className="w-8 md:w-12 text-center">#</div>
                          <div className="w-10 md:w-14"></div>
                          <div className="flex-1">Title</div>
-                         <div className="hidden md:block w-1/3">Album</div>
+                         <div className="hidden md:block w-1/3">Artist</div>
                          <div className="hidden sm:block w-12 text-right"><Icons.Clock size={14} /></div>
                          <div className="w-8 md:w-10"></div>
                      </div>
@@ -1358,7 +1359,7 @@ const MainContent: React.FC<MainContentProps> = ({ view, searchQuery, onSearch, 
                             <div className="w-8 md:w-12 text-center">#</div>
                             <div className="w-10 md:w-14"></div>
                             <div className="flex-1">Title</div>
-                            <div className="hidden md:block w-1/3">Album</div>
+                            <div className="hidden md:block w-1/3">Artist</div>
                             <div className="hidden sm:block w-12 text-right"><Icons.Clock size={14} /></div>
                             <div className="w-8 md:w-10"></div>
                         </div>
