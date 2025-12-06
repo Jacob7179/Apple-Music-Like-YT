@@ -20,48 +20,52 @@ const SongCard: React.FC<{
     isPlaying?: boolean;
     onMenuClick?: (e: React.MouseEvent, song: Song) => void;
     displayArtist?: string;
-}> = ({ song, onClick, isLiked, onToggleLike, isActive, isPlaying, onMenuClick, displayArtist }) => (
-  <div 
-    onClick={onClick}
-    className="group flex flex-col w-full cursor-pointer"
-  >
-    <div className="relative aspect-square mb-2 overflow-hidden rounded-[8px] shadow-lg bg-neutral-800">
-      <img 
-        src={song.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(song.title)}&background=random`} 
-        alt={song.title} 
-        className={`w-full h-full object-cover transition duration-500 group-hover:scale-105 ${isActive && isPlaying ? 'brightness-75' : ''}`}
-        loading="lazy"
-        onError={(e) => {
-            (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(song.title)}&background=333&color=fff`;
-        }}
-      />
-      {/* Overlay: Always show animation if playing, or show play button on hover */}
-      <div className={`absolute inset-0 bg-black/20 transition flex items-end justify-between p-2 ${isActive && isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-         <div className="w-8 h-8 bg-black/60 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 shadow-lg">
-             {isActive && isPlaying ? (
-                 <Icons.Volume2 fill="white" size={14} className="animate-pulse" />
-             ) : (
-                 <Icons.Play fill="white" className="ml-0.5" size={14} />
-             )}
-         </div>
-         {onMenuClick && (
-            <button 
-                onClick={(e) => onMenuClick(e, song)} 
-                className="w-8 h-8 bg-black/60 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 shadow-lg hover:bg-black/80"
-            >
-                <Icons.MoreHorizontal size={16} />
-            </button>
-         )}
+}> = ({ song, onClick, isLiked, onToggleLike, isActive, isPlaying, onMenuClick, displayArtist }) => {
+  const [isVisible, setIsVisible] = useState(true);
+
+  if (!isVisible) return null;
+
+  return (
+    <div 
+      onClick={onClick}
+      className="group flex flex-col w-full cursor-pointer"
+    >
+      <div className="relative aspect-square mb-2 overflow-hidden rounded-[8px] shadow-lg bg-neutral-800">
+        <img 
+          src={song.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(song.title)}&background=random`} 
+          alt={song.title} 
+          className={`w-full h-full object-cover transition duration-500 group-hover:scale-105 ${isActive && isPlaying ? 'brightness-75' : ''}`}
+          loading="lazy"
+          onError={() => setIsVisible(false)} // Hide song if image not found
+        />
+        {/* Overlay: Always show animation if playing, or show play button on hover */}
+        <div className={`absolute inset-0 bg-black/20 transition flex items-end justify-between p-2 ${isActive && isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+           <div className="w-8 h-8 bg-black/60 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 shadow-lg">
+               {isActive && isPlaying ? (
+                   <Icons.Volume2 fill="white" size={14} className="animate-pulse" />
+               ) : (
+                   <Icons.Play fill="white" className="ml-0.5" size={14} />
+               )}
+           </div>
+           {onMenuClick && (
+              <button 
+                  onClick={(e) => onMenuClick(e, song)} 
+                  className="w-8 h-8 bg-black/60 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 shadow-lg hover:bg-black/80"
+              >
+                  <Icons.MoreHorizontal size={16} />
+              </button>
+           )}
+        </div>
+      </div>
+      <div className="flex justify-between items-start">
+          <div className="flex flex-col overflow-hidden w-full">
+              <h3 className={`font-normal text-[13px] truncate leading-tight mb-0.5 ${isActive ? 'text-[#fa2d48]' : 'text-white/90'}`}>{song.title}</h3>
+              <p className="text-gray-400 text-[13px] truncate group-hover:text-white/70 transition">{displayArtist || song.artist}</p>
+          </div>
       </div>
     </div>
-    <div className="flex justify-between items-start">
-        <div className="flex flex-col overflow-hidden w-full">
-            <h3 className={`font-normal text-[13px] truncate leading-tight mb-0.5 ${isActive ? 'text-[#fa2d48]' : 'text-white/90'}`}>{song.title}</h3>
-            <p className="text-gray-400 text-[13px] truncate group-hover:text-white/70 transition">{displayArtist || song.artist}</p>
-        </div>
-    </div>
-  </div>
-);
+  );
+};
 
 const SongRow: React.FC<{ 
     song: Song; 
@@ -73,79 +77,83 @@ const SongRow: React.FC<{
     onToggleLike: (e: React.MouseEvent) => void;
     onMenuClick: (e: React.MouseEvent, song: Song) => void;
     displayArtist?: string;
-}> = ({ song, index, onClick, isActive, isPlaying, isLiked, onToggleLike, onMenuClick, displayArtist }) => (
-    <div 
-        onClick={onClick}
-        className={`group flex items-center py-2 px-3 md:px-4 rounded-md hover:bg-white/10 transition-colors cursor-pointer select-none ${isActive ? 'bg-white/10' : ''}`}
-    >
-        {/* Index / Play Icon */}
-        <div className="w-6 md:w-8 text-center text-gray-500 text-sm font-medium mr-2 flex justify-center">
-            <span className="group-hover:hidden block">
-                {isActive ? (
-                    isPlaying ? <Icons.Volume2 size={14} className="text-[#fa2d48] animate-pulse" /> : <span className="text-[#fa2d48]">{index + 1}</span>
-                ) : index + 1}
-            </span>
-            <span className="hidden group-hover:block text-white">
-                {isActive && isPlaying ? <Icons.Volume2 size={12} className="text-[#fa2d48]" /> : <Icons.Play fill="currentColor" size={12} />}
-            </span>
-        </div>
+}> = ({ song, index, onClick, isActive, isPlaying, isLiked, onToggleLike, onMenuClick, displayArtist }) => {
+    const [isVisible, setIsVisible] = useState(true);
 
-        {/* Thumbnail */}
-        <div className="w-10 h-10 rounded-[4px] overflow-hidden mr-3 md:mr-4 flex-shrink-0 shadow-sm bg-neutral-800 relative">
-            <img 
-                src={song.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(song.title)}&background=random`} 
-                className={`w-full h-full object-cover ${isActive && isPlaying ? 'opacity-70' : ''}`}
-                alt=""
-                onError={(e) => {
-                    (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(song.title)}&background=333&color=fff`;
-                }}
-            />
-             {isActive && isPlaying && (
-                 <div className="absolute inset-0 flex items-center justify-center">
-                      <Icons.Volume2 size={16} className="text-white drop-shadow-md animate-pulse" />
-                 </div>
-             )}
-        </div>
+    if (!isVisible) return null;
 
-        {/* Title & Artist */}
-        <div className="flex-1 min-w-0 pr-2 md:pr-4">
-            <h4 className={`text-[13px] md:text-[14px] truncate mb-0.5 ${isActive ? 'text-[#fa2d48]' : 'text-white'}`}>
-                {song.title}
-            </h4>
-            <p className="text-[11px] md:text-[12px] text-gray-400 truncate group-hover:text-white/70 transition-colors">
-                {displayArtist || song.artist}
-            </p>
-        </div>
+    return (
+        <div 
+            onClick={onClick}
+            className={`group flex items-center py-2 px-3 md:px-4 rounded-md hover:bg-white/10 transition-colors cursor-pointer select-none ${isActive ? 'bg-white/10' : ''}`}
+        >
+            {/* Index / Play Icon */}
+            <div className="w-6 md:w-8 text-center text-gray-500 text-sm font-medium mr-2 flex justify-center">
+                <span className="group-hover:hidden block">
+                    {isActive ? (
+                        isPlaying ? <Icons.Volume2 size={14} className="text-[#fa2d48] animate-pulse" /> : <span className="text-[#fa2d48]">{index + 1}</span>
+                    ) : index + 1}
+                </span>
+                <span className="hidden group-hover:block text-white">
+                    {isActive && isPlaying ? <Icons.Volume2 size={12} className="text-[#fa2d48]" /> : <Icons.Play fill="currentColor" size={12} />}
+                </span>
+            </div>
 
-        {/* Artist Column (Desktop) */}
-        <div className="hidden md:block w-1/3 min-w-0 pr-4">
-            <p className="text-[13px] text-gray-400 truncate group-hover:text-white/70 transition-colors">
-                {displayArtist || song.artist}
-            </p>
-        </div>
+            {/* Thumbnail */}
+            <div className="w-10 h-10 rounded-[4px] overflow-hidden mr-3 md:mr-4 flex-shrink-0 shadow-sm bg-neutral-800 relative">
+                <img 
+                    src={song.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(song.title)}&background=random`} 
+                    className={`w-full h-full object-cover ${isActive && isPlaying ? 'opacity-70' : ''}`}
+                    alt=""
+                    onError={() => setIsVisible(false)} // Hide row if image not found
+                />
+                 {isActive && isPlaying && (
+                     <div className="absolute inset-0 flex items-center justify-center">
+                          <Icons.Volume2 size={16} className="text-white drop-shadow-md animate-pulse" />
+                     </div>
+                 )}
+            </div>
 
-        {/* Duration (Mock) */}
-        <div className="hidden sm:block w-12 text-right text-[12px] text-gray-500 font-variant-numeric tabular-nums group-hover:text-gray-300">
-            3:45
+            {/* Title & Artist */}
+            <div className="flex-1 min-w-0 pr-2 md:pr-4">
+                <h4 className={`text-[13px] md:text-[14px] truncate mb-0.5 ${isActive ? 'text-[#fa2d48]' : 'text-white'}`}>
+                    {song.title}
+                </h4>
+                <p className="text-[11px] md:text-[12px] text-gray-400 truncate group-hover:text-white/70 transition-colors">
+                    {displayArtist || song.artist}
+                </p>
+            </div>
+
+            {/* Artist Column (Desktop) */}
+            <div className="hidden md:block w-1/3 min-w-0 pr-4">
+                <p className="text-[13px] text-gray-400 truncate group-hover:text-white/70 transition-colors">
+                    {displayArtist || song.artist}
+                </p>
+            </div>
+
+            {/* Duration (Mock) */}
+            <div className="hidden sm:block w-12 text-right text-[12px] text-gray-500 font-variant-numeric tabular-nums group-hover:text-gray-300">
+                3:45
+            </div>
+            
+            {/* Actions */}
+            <div className="w-16 md:w-20 flex justify-end items-center space-x-1">
+                 <button 
+                    onClick={onToggleLike}
+                    className={`p-1.5 rounded-full hover:bg-white/10 transition ${isLiked ? 'text-[#fa2d48] opacity-100' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
+                >
+                    <Icons.Heart size={16} fill={isLiked ? "currentColor" : "none"} />
+                </button>
+                <button
+                    onClick={(e) => onMenuClick(e, song)}
+                    className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 opacity-0 group-hover:opacity-100 transition"
+                >
+                    <Icons.MoreHorizontal size={16} />
+                </button>
+            </div>
         </div>
-        
-        {/* Actions */}
-        <div className="w-16 md:w-20 flex justify-end items-center space-x-1">
-             <button 
-                onClick={onToggleLike}
-                className={`p-1.5 rounded-full hover:bg-white/10 transition ${isLiked ? 'text-[#fa2d48] opacity-100' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`}
-            >
-                <Icons.Heart size={16} fill={isLiked ? "currentColor" : "none"} />
-            </button>
-            <button
-                onClick={(e) => onMenuClick(e, song)}
-                className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 opacity-0 group-hover:opacity-100 transition"
-            >
-                <Icons.MoreHorizontal size={16} />
-            </button>
-        </div>
-    </div>
-);
+    );
+};
 
 // Skeleton for loading results quickly
 const SkeletonLoader = () => (
@@ -552,6 +560,14 @@ const MainContent: React.FC<MainContentProps> = ({ view, searchQuery, onSearch, 
   const [searchResults, setSearchResults] = useState<Song[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [sortOption, setSortOption] = useState<'title' | 'artist' | 'added'>('added');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Scroll Reset Logic
+  useEffect(() => {
+    if (scrollRef.current) {
+        scrollRef.current.scrollTo({ top: 0, behavior: 'instant' });
+    }
+  }, [view, searchQuery, selectedPlaylistId, selectedArtist]);
   
   // Context Menu State
   const [contextMenuPos, setContextMenuPos] = useState<{x: number, y: number} | null>(null);
@@ -1413,6 +1429,7 @@ const MainContent: React.FC<MainContentProps> = ({ view, searchQuery, onSearch, 
 
   return (
     <div 
+        ref={scrollRef}
         className="h-full overflow-y-auto custom-scrollbar p-4 md:p-8 scroll-smooth pb-28 md:pb-24"
         onClick={closeMenu}
     >

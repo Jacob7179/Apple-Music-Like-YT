@@ -14,7 +14,7 @@ try {
       apiKey = process.env.API_KEY;
   }
   
-  // Validate Key: Must exist, not be empty, and not be the string "undefined"
+  // Validate Key
   if (apiKey && apiKey !== 'undefined' && apiKey.trim() !== '') {
      ai = new GoogleGenAI({ apiKey });
   } else {
@@ -25,13 +25,33 @@ try {
   console.warn("uMusic: Running in Demo Mode (No valid API Key found).");
 }
 
+// Helper: Clean title for better matching
+const cleanMetadata = (str: string): string => {
+    if (!str) return "";
+    return str
+        .replace(/[「」]/g, "")
+        .replace(/【.*?】/g, "")
+        .replace(/\(Official.*?\)/gi, "")
+        .replace(/\[Official.*?\]/gi, "")
+        .replace(/\(Music Video\)/gi, "")
+        .replace(/\(Lyric Video\)/gi, "")
+        .replace(/\[MV\]/gi, "")
+        .replace(/\(MV\)/gi, "")
+        .replace(/Official Video/gi, "")
+        .replace(/Official Audio/gi, "")
+        .replace(/\(Audio\)/gi, "")
+        .replace(/\[Audio\]/gi, "")
+        .replace(/ft\./gi, "feat.")
+        .replace(/feat\./gi, "feat.")
+        .replace(/\s+/g, " ") // Collapse multiple spaces
+        .trim();
+};
+
 const extractVideoId = (url: string): string | null => {
   if (!url) return null;
-  // Match standard YouTube ID patterns
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = url.match(regExp);
-  // YouTube IDs are 11 characters
-  return (match && match[2] && match[2].length === 11) ? match[2] : null;
+  // Robust match for standard YouTube and YouTube Music URLs
+  const match = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/);
+  return match ? match[1] : null;
 };
 
 // Helper for Mock Data
@@ -45,27 +65,46 @@ const getMockData = (query: string): Song[] => {
 };
 
 export const searchYouTube = async (query: string): Promise<Song[]> => {
-  // 1. Immediate Demo Mode check
   if (isDemoMode || !ai) {
-      await new Promise(resolve => setTimeout(resolve, 600)); // Simulate network latency
+      await new Promise(resolve => setTimeout(resolve, 600));
       return getMockData(query);
   }
 
   try {
-    const prompt = `Search YouTube for "${query}".
-    Return a list of 6 top music video results.
-    Prefer "Official Audio" or "Lyric Video" versions to ensure playback.
-    
-    You MUST output a raw JSON array.
-    Do not use Markdown code blocks.
-    
-    Each object in the array must have:
-    - "title": string
-    - "artist": string
-    - "videoId": string (the 11-character YouTube ID)
-    - "thumbnail": string (optional)
-    
-    If you cannot find exact videoIds, provide the full YouTube "url" instead.`;
+    const directVideoId = extractVideoId(query);
+    const isUrlSearch = !!directVideoId;
+    let prompt = "";
+
+    if (isUrlSearch) {
+        prompt = `You are a music metadata extractor.
+        Identify the Song Title and Artist for this YouTube video ID: "${directVideoId}".
+        
+        Return a strictly valid JSON array containing exactly one object:
+        [
+          {
+            "title": "Song Title",
+            "artist": "Artist Name",
+            "videoId": "${directVideoId}"
+          }
+        ]
+        
+        If you cannot identify it, use "Unknown Title" and "Unknown Artist".
+        Do NOT include "Official Video" in the title.
+        `;
+    } else {
+        prompt = `Search YouTube for "${query}".
+        Return a list of 6 top music video results.
+        Prefer "Official Audio" or "Lyric Video".
+        
+        Return a strictly valid JSON array.
+        Each object must have:
+        - "title": string (The song title ONLY. Do NOT include the artist name.)
+        - "artist": string (The artist name ONLY.)
+        - "videoId": string (The 11-character YouTube ID)
+        
+        Example: [{"title": "Song", "artist": "Artist", "videoId": "xxxxxxxxxxx"}]
+        `;
+    }
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -88,13 +127,30 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
         if (Array.isArray(parsed)) {
             songs = parsed.map((item: any) => {
                 const videoId = item.videoId || extractVideoId(item.url);
-                if (!videoId) return null;
+                // Strict ID check
+                if (!videoId || videoId.length !== 11) return null;
+
+                const rawArtist = item.artist || 'Unknown Artist';
+                let artist = cleanMetadata(rawArtist);
+                
+                let title = cleanMetadata(item.title);
+                
+                // Heuristic: Remove artist from title if duplicated
+                if (title.toLowerCase().startsWith(artist.toLowerCase() + " - ")) {
+                    title = title.substring(artist.length + 3).trim();
+                } else if (title.toLowerCase().startsWith(artist.toLowerCase() + "-")) {
+                    title = title.substring(artist.length + 1).trim();
+                }
+                if (title.toLowerCase().endsWith(" - " + artist.toLowerCase())) {
+                    title = title.substring(0, title.length - (artist.length + 3)).trim();
+                }
+
                 return {
                     id: videoId,
                     videoId: videoId,
-                    title: item.title,
-                    artist: item.artist || 'Unknown Artist',
-                    thumbnail: item.thumbnail || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+                    title: title || 'Unknown Title',
+                    artist: artist || 'Unknown Artist',
+                    thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
                 };
             }).filter((s): s is Song => s !== null);
         }
@@ -102,7 +158,7 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
         console.warn("Gemini Search: JSON parse failed, parsing chunks.", e);
     }
 
-    // Fallback to Grounding Metadata
+    // Fallback to Grounding Metadata (only if JSON failed or returned empty)
     if (songs.length === 0) {
         const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
         if (chunks && chunks.length > 0) {
@@ -110,11 +166,31 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
                  if (chunk.web?.uri && (chunk.web.uri.includes('youtube.com') || chunk.web.uri.includes('youtu.be'))) {
                      const vid = extractVideoId(chunk.web.uri);
                      if (vid) {
+                         // Parse Title/Artist from the web title
+                         let fullTitle = chunk.web.title || `Result ${i + 1}`;
+                         // Remove common suffixes
+                         fullTitle = fullTitle.replace(/- YouTube$/, '').replace(/\| Official Video$/, '').replace(/\| Official Audio$/, '').trim();
+                         
+                         let title = fullTitle;
+                         let artist = 'Unknown Artist';
+
+                         // Try to split "Artist - Title"
+                         const separator = fullTitle.includes(" - ") ? " - " : fullTitle.includes(" | ") ? " | " : null;
+                         
+                         if (separator) {
+                             const parts = fullTitle.split(separator);
+                             if (parts.length >= 2) {
+                                 // Heuristic: Artist is usually the one that matches query, or just assume Artist - Title
+                                 artist = parts[0].trim();
+                                 title = parts.slice(1).join(' ').trim();
+                             }
+                         }
+
                          songs.push({
                              id: vid,
                              videoId: vid,
-                             title: chunk.web.title || `Result ${i + 1}`,
-                             artist: 'YouTube Result',
+                             title: cleanMetadata(title),
+                             artist: cleanMetadata(artist),
                              thumbnail: `https://img.youtube.com/vi/${vid}/hqdefault.jpg`
                          });
                      }
@@ -123,18 +199,29 @@ export const searchYouTube = async (query: string): Promise<Song[]> => {
         }
     }
 
+    // Deduplicate
     const uniqueSongs = songs.filter((song, index, self) => 
         index === self.findIndex((t) => (t.videoId === song.videoId))
     );
 
-    console.log(`Gemini Search found ${uniqueSongs.length} results for "${query}"`);
+    // If direct URL search, ensure we return it even if standard parsing failed, 
+    // provided we have the ID.
+    if (isUrlSearch && uniqueSongs.length === 0 && directVideoId) {
+         return [{
+             id: directVideoId,
+             videoId: directVideoId,
+             title: "Unknown Title",
+             artist: "Unknown Artist",
+             thumbnail: `https://img.youtube.com/vi/${directVideoId}/hqdefault.jpg`
+         }];
+    }
+
     return uniqueSongs;
 
   } catch (error) {
     console.error("Gemini Search API Failed:", error);
-    console.warn("Switching to Demo Mode due to API error (likely Invalid Key or Network).");
-    isDemoMode = true; // Auto-switch to demo mode for subsequent requests
-    return getMockData(query); // Return mock data for this request
+    isDemoMode = true; 
+    return getMockData(query);
   }
 };
 
@@ -143,7 +230,6 @@ export interface LyricLine {
     text: string;
 }
 
-// Parse standard LRC format: [mm:ss.xx] Lyrics
 const parseLRC = (lrc: string): LyricLine[] => {
     const lines = lrc.split('\n');
     const result: LyricLine[] = [];
@@ -155,14 +241,9 @@ const parseLRC = (lrc: string): LyricLine[] => {
             const min = parseInt(match[1]);
             const sec = parseInt(match[2]);
             const frac = match[3];
-            // ms can be 2 digits (centiseconds) or 3 digits (milliseconds)
             const ms = frac.length === 2 ? parseInt(frac) * 10 : parseInt(frac);
-            
             const time = min * 60 + sec + (ms / 1000);
-            // Remove timestamp and any potential metadata tags
             const text = line.replace(/\[.*?\]/g, '').trim();
-            
-            // Filter out empty lines or common metadata headers if strictly parsing song text
             if (text && !text.startsWith('ar:') && !text.startsWith('ti:')) {
                 result.push({ time, text });
             }
@@ -171,33 +252,17 @@ const parseLRC = (lrc: string): LyricLine[] => {
     return result;
 };
 
-// Helper: Clean title for better matching (remove Official Video, symbols, etc.)
-const cleanMetadata = (str: string): string => {
-    if (!str) return "";
-    return str
-        .replace(/\(Official.*?\)/gi, "")
-        .replace(/\[Official.*?\]/gi, "")
-        .replace(/\(Music Video\)/gi, "")
-        .replace(/\(Lyric Video\)/gi, "")
-        .replace(/\[MV\]/gi, "")
-        .replace(/\(MV\)/gi, "")
-        .replace(/Official Video/gi, "")
-        .replace(/Official Audio/gi, "")
-        .replace(/ft\..*/i, "")
-        .replace(/feat\..*/i, "")
-        .replace(/[\(\)\[\]]/g, " ") // Remove brackets
-        .replace(/\s+/g, " ") // Collapse multiple spaces
-        .trim();
-};
-
 export const getLyrics = async (title: string, artist: string, duration: number = 200): Promise<LyricLine[]> => {
-    
-    const cleanTitle = cleanMetadata(title);
+    let cleanTitle = cleanMetadata(title);
     const cleanArtist = cleanMetadata(artist);
 
-    // 1. Try LRCLIB (Highest Priority)
+    // Filter: Remove artist name from title if present
+    if (cleanArtist && cleanTitle.toLowerCase().includes(cleanArtist.toLowerCase())) {
+         cleanTitle = cleanTitle.replace(new RegExp(cleanArtist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+         cleanTitle = cleanTitle.replace(/^[\s\-\/]+|[\s\-\/]+$/g, '').trim();
+    }
+
     try {
-        console.log(`Fetching lyrics from LRCLIB for: "${cleanTitle}" by "${cleanArtist}"`);
         const url = new URL('https://lrclib.net/api/get');
         url.searchParams.append('artist_name', cleanArtist);
         url.searchParams.append('track_name', cleanTitle);
@@ -211,15 +276,12 @@ export const getLyrics = async (title: string, artist: string, duration: number 
             }
         }
 
-        // 1b. Fallback to LRCLIB Search (Fuzzy Match)
         const searchUrl = new URL('https://lrclib.net/api/search');
         searchUrl.searchParams.append('q', `${cleanTitle} ${cleanArtist}`);
         const searchRes = await fetch(searchUrl.toString());
         if (searchRes.ok) {
             const searchData = await searchRes.json();
-             // Find best match with synced lyrics
              if (Array.isArray(searchData)) {
-                 // Sort by how close the duration is
                  const bestMatch = searchData
                     .filter((item: any) => item.syncedLyrics)
                     .sort((a: any, b: any) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration))[0];
@@ -233,23 +295,14 @@ export const getLyrics = async (title: string, artist: string, duration: number 
         console.warn("LRCLIB fetch failed, falling back to Gemini.", e);
     }
 
-    // 2. Fallback to Gemini
     if (isDemoMode || !ai) {
         return getMockLyrics(duration);
     }
 
     try {
-        const prompt = `You are a professional lyrics synchronization engine.
-        Provide the ACTUAL synchronized lyrics for the song "${cleanTitle}" by "${cleanArtist}".
-        The song duration is approximately ${Math.floor(duration)} seconds.
-
-        Output strictly a JSON array of objects with "time" (number in seconds) and "text" (string).
-        
-        Rules:
-        1. "time": Precise start time of the line in seconds.
-        2. "text": The exact lyric line. No conversational filler.
-        3. Structure the lyrics logically (Verse, Chorus, Bridge) but do not include headers like [Chorus] in the text.
-        4. If you don't know the lyrics, provide a "Lyrics not available" message at time 0.
+        const prompt = `Generate synchronized lyrics for "${cleanTitle}" by "${cleanArtist}".
+        Duration: ${Math.floor(duration)}s.
+        Output strictly a JSON array of {time: number, text: string}.
         `;
 
         const response = await ai.models.generateContent({
@@ -276,30 +329,17 @@ export const getLyrics = async (title: string, artist: string, duration: number 
             if (!Array.isArray(data) || data.length === 0) return getMockLyrics(duration);
             return data;
         } catch (e) {
-            console.error("Failed to parse lyrics JSON", e);
             return getMockLyrics(duration);
         }
 
     } catch (error) {
-        console.error("Gemini Lyrics API Failed:", error);
         return getMockLyrics(duration);
     }
 }
 
 const getMockLyrics = (duration: number): LyricLine[] => {
-    const lines = [
-        "...",
-        "[Lyrics Unavailable]",
-        "Could not fetch synchronized lyrics",
-        "Enjoy the music",
-        "..."
+    return [
+        { time: 5, text: "Lyrics not available" },
+        { time: 10, text: "Enjoy the music" }
     ];
-    
-    const step = (duration * 0.8) / lines.length;
-    const startOffset = 5;
-
-    return lines.map((text, i) => ({
-        time: startOffset + (i * step),
-        text
-    }));
 };
